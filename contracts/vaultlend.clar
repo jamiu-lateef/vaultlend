@@ -86,3 +86,89 @@
     (ok (var-set protocol-paused paused))
   )
 )
+
+(define-public (update-btc-price
+    (price uint)
+    (timestamp uint)
+  )
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (asserts! (> price u0) ERR-INVALID-AMOUNT)
+    (var-set btc-price-in-usd
+      (some {
+        price: price,
+        timestamp: timestamp,
+      })
+    )
+    (ok true)
+  )
+)
+
+(define-public (set-current-time (time uint))
+  (begin
+    (asserts! (is-eq tx-sender (var-get protocol-owner)) ERR-NOT-AUTHORIZED)
+    (ok (var-set current-time time))
+  )
+)
+
+;; CORE UTILITY FUNCTIONS
+
+(define-private (collateral-value
+    (collateral-amount uint)
+    (price uint)
+  )
+  (* collateral-amount price)
+)
+
+(define-private (required-collateral
+    (debt-amount uint)
+    (price uint)
+  )
+  (/ (* debt-amount COLLATERAL-RATIO) (/ price u100))
+)
+
+(define-private (is-position-safe
+    (user principal)
+    (btc-price uint)
+  )
+  (let (
+      (position (unwrap! (map-get? positions user) false))
+      (debt (get debt position))
+      (collateral (get collateral position))
+      (collateral-value-usd (collateral-value collateral btc-price))
+      (min-collateral-value-usd (/ (* debt COLLATERAL-RATIO) u100))
+    )
+    (>= collateral-value-usd min-collateral-value-usd)
+  )
+)
+
+(define-private (calculate-interest
+    (debt uint)
+    (blocks-passed uint)
+  )
+  (/ (* debt (* blocks-passed INTEREST_RATE_PER_BLOCK)) INTEREST_RATE_DENOMINATOR)
+)
+
+;; INTEREST ACCRUAL SYSTEM
+
+(define-private (accrue-global-interest)
+  (let (
+      (current-block stacks-block-height)
+      (last-block (var-get last-accrual-block))
+      (blocks-passed (- current-block last-block))
+      (total-system-debt (var-get total-debt))
+      (interest-accrued (calculate-interest total-system-debt blocks-passed))
+    )
+    (begin
+      (if (> blocks-passed u0)
+        (begin
+          (var-set stability-fee (+ (var-get stability-fee) interest-accrued))
+          (var-set total-debt (+ total-system-debt interest-accrued))
+          (var-set last-accrual-block current-block)
+        )
+        false
+      )
+      true
+    )
+  )
+)
